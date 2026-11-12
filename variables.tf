@@ -1,7 +1,7 @@
 variable "aws_region" {
   description = "AWS region for all regional resources."
   type        = string
-  default     = "us-west-1"
+  default     = "us-east-1"
 }
 
 variable "project_name" {
@@ -44,12 +44,12 @@ variable "max_size" {
 
 variable "root_domain_name" {
   description = "Public Route 53 hosted zone"
-  type = string
-  default = "testaws.xyz"
+  type        = string
+  default     = "testaws.xyz"
 }
 
 variable "api_domain_name" {
   description = "Public API hostname"
-  type = string
-  default = "api.testaws.xyz"
+  type        = string
+  default     = "api.testaws.xyz"
 }
