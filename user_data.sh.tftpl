@@ -1,0 +1,73 @@
+#!/bin/bash
+set -euxo pipefail
+exec > /var/log/user-data.log 2>&1
+
+apt-get update -y
+# Install Ubuntu packages
+apt-get install -y ca-certificates curl git nginx unzip
+
+# Install AWS CLI v2 using AWS's official installer
+curl -fsSL https://awscli.amazonaws.com/v2/install.sh \
+  -o /tmp/awscli-install.sh
+
+bash /tmp/awscli-install.sh --system
+
+# Verify installation
+aws --version
+
+# Make Nginx available immediately
+systemctl enable nginx
+systemctl start nginx
+
+# Install Node.js 22.x
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+apt-get install -y nodejs
+npm install --global pm2
+
+# Retrieve the complete .env file from SSM Parameter Store.
+aws ssm get-parameter \
+  --name "${env_parameter_name}" \
+  --with-decryption \
+  --region "${aws_region}" \
+  --query 'Parameter.Value' \
+  --output text > /opt/forum-app.env
+
+mkdir -p /opt/forum-app
+chown ubuntu:ubuntu /opt/forum-app
+git clone "${repo_url}" /opt/forum-app
+mv /opt/forum-app.env /opt/forum-app/.env
+chown -R ubuntu:ubuntu /opt/forum-app
+chmod 600 /opt/forum-app/.env
+
+# Install dependencies and start the app as the ubuntu user.
+sudo -u ubuntu -H bash -lc '
+  cd /opt/forum-app
+  npm ci
+  npm run build
+  pm2 start npm --name forum-app -- start
+  pm2 save
+'
+
+# Configure PM2 to start on reboot for the ubuntu user.
+env PATH=/usr/bin:/bin pm2 startup systemd -u ubuntu --hp /home/ubuntu
+
+# Nginx is the only application port exposed to the ALB.
+cat > /etc/nginx/sites-available/forum-app <<'NGINX'
+server {
+    listen 80 default_server;
+    server_name _;
+
+    location / {
+        proxy_pass http://127.0.0.1:3003;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+    }
+}
+NGINX
+
+rm -f /etc/nginx/sites-enabled/default
+ln -s /etc/nginx/sites-available/forum-app /etc/nginx/sites-enabled/forum-app
+nginx -t
